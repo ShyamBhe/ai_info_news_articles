@@ -1,84 +1,117 @@
-
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import express from 'express';
-import Database from 'better-sqlite3';
 import multer from 'multer';
 import jwt from 'jsonwebtoken';
-import { seed } from './seed.js';
+import { createClient } from '@supabase/supabase-js';
 
 // Resolve server directory
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// Load .env from project root (one level above server)
-dotenv.config({
-  path: path.resolve(__dirname, '../.env')
-});
+// Load .env from project root (one level above server). On Render the values
+// come from the dashboard "Environment" tab instead, so a missing file is fine.
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
-// Environment variables
 const {
-  ADMIN_EMAIL,
   ADMIN_PASSWORD = 'change-me',
   JWT_SECRET = 'dev-secret',
-  PORT = 4000
+  PORT = 4000,
+  SUPABASE_URL,
+  SUPABASE_BUCKET = 'images',
 } = process.env;
 
-console.log('ADMIN_EMAIL loaded:', ADMIN_EMAIL ? 'YES' : 'NO');
-console.log(
-  'ADMIN_PASSWORD loaded:',
-  process.env.ADMIN_PASSWORD ? 'YES' : 'NO (default "change-me" is active)'
-);
-console.log(
-  'JWT_SECRET loaded:',
-  process.env.JWT_SECRET ? 'YES' : 'NO (default "dev-secret" is active)'
-);
+// Supabase "secret" key (sb_secret_...) or the older "service_role" key.
+const SUPABASE_KEY =
+  process.env.SUPABASE_SECRET_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// Directories
-const dataDir = path.join(__dirname, 'data');
-const upDir = path.join(dataDir, 'uploads');
+if (!SUPABASE_URL || !SUPABASE_KEY) {
+  console.error(
+    '\nMissing Supabase settings. Set SUPABASE_URL and SUPABASE_SECRET_KEY ' +
+      '(in the root .env file locally, or in Render > Environment).\n'
+  );
+  process.exit(1);
+}
 
-fs.mkdirSync(upDir, { recursive: true });
+if (!process.env.ADMIN_PASSWORD || !process.env.JWT_SECRET) {
+  console.warn(
+    'WARNING: ADMIN_PASSWORD and/or JWT_SECRET are not set - insecure defaults are active.'
+  );
+}
 
-// Database
-const db = new Database(path.join(dataDir, 'aipana.db'));
-
-db.exec(`
-  CREATE TABLE IF NOT EXISTS posts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title_en TEXT,
-    title_ne TEXT,
-    body_en TEXT,
-    body_ne TEXT,
-    category TEXT DEFAULT 'news',
-    image TEXT,
-    views INTEGER DEFAULT 0,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-  )
-`);
-
-seed(db, upDir);
-
-// Image upload configuration
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: upDir,
-    filename: (_r, f, cb) =>
-      cb(null, Date.now() + path.extname(f.originalname).toLowerCase()),
-  }),
-  limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (_r, f, cb) =>
-    cb(null, /^image\/(png|jpe?g|webp|gif)$/.test(f.mimetype)),
+// Supabase client (server side only: the secret key must never reach the browser)
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false },
 });
+
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+const IMAGE_EXT = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/webp': '.webp',
+  'image/gif': '.gif',
+};
+
+// Make sure the public image bucket exists (does nothing if it already does)
+(async () => {
+  try {
+    const { error } = await supabase.storage.createBucket(SUPABASE_BUCKET, {
+      public: true,
+      fileSizeLimit: MAX_IMAGE_BYTES,
+    });
+    if (error && !/already exists|duplicate/i.test(error.message)) {
+      console.warn('Could not create storage bucket:', error.message);
+    }
+  } catch (e) {
+    console.warn('Could not reach Supabase storage:', e.message);
+  }
+})();
+
+// Wraps async route handlers so errors reach the error handler below
+const ah = (fn) => (req, res, next) =>
+  Promise.resolve(fn(req, res, next)).catch(next);
+
+const httpError = (status, message) =>
+  Object.assign(new Error(message), { status, expose: true });
+
+// Image upload: kept in memory, then sent to Supabase Storage
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_IMAGE_BYTES },
+  fileFilter: (_req, f, cb) =>
+    IMAGE_EXT[f.mimetype]
+      ? cb(null, true)
+      : cb(httpError(400, 'Only PNG, JPG, WEBP or GIF images are allowed.')),
+});
+
+async function uploadImage(file) {
+  const name = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}${IMAGE_EXT[file.mimetype]}`;
+  const { error } = await supabase.storage
+    .from(SUPABASE_BUCKET)
+    .upload(name, file.buffer, { contentType: file.mimetype });
+  if (error) throw error;
+  return supabase.storage.from(SUPABASE_BUCKET).getPublicUrl(name).data.publicUrl;
+}
+
+// Deletes an image from Storage when we know it lives in our bucket
+async function removeImage(url) {
+  const marker = `/storage/v1/object/public/${SUPABASE_BUCKET}/`;
+  const i = url ? url.indexOf(marker) : -1;
+  if (i < 0) return;
+  try {
+    const name = decodeURIComponent(url.slice(i + marker.length).split('?')[0]);
+    await supabase.storage.from(SUPABASE_BUCKET).remove([name]);
+  } catch (e) {
+    console.warn('Could not delete old image:', e.message);
+  }
+}
 
 // Authentication middleware
 const auth = (req, res, next) => {
   try {
-    jwt.verify(
-      (req.headers.authorization || '').replace('Bearer ', ''),
-      JWT_SECRET
-    );
+    jwt.verify((req.headers.authorization || '').replace('Bearer ', ''), JWT_SECRET);
     next();
   } catch {
     res.status(401).json({ error: 'Unauthorized' });
@@ -89,132 +122,194 @@ const auth = (req, res, next) => {
 const app = express();
 
 app.use(express.json());
-app.use('/uploads', express.static(upDir, { maxAge: '7d' }));
+
+// Never let browsers cache API answers, so edits show up straight away
+app.use('/api', (_req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+
+// Health check. Pinging this regularly also keeps Render awake and counts as
+// database activity, so the free Supabase project is not paused for inactivity.
+app.get(
+  '/api/health',
+  ah(async (_req, res) => {
+    const { error } = await supabase.from('posts').select('id').limit(1);
+    if (error) throw error;
+    res.json({ ok: true });
+  })
+);
 
 // Admin login
 app.post('/api/login', (req, res) => {
   if (req.body.password !== ADMIN_PASSWORD) {
     return res.status(401).json({ error: 'Wrong password' });
   }
-
   res.json({
-    token: jwt.sign({ admin: true }, JWT_SECRET, {
-      expiresIn: '7d',
-    }),
+    token: jwt.sign({ admin: true }, JWT_SECRET, { expiresIn: '7d' }),
   });
 });
 
 // Get posts
-app.get('/api/posts', (req, res) => {
-  const limit = Math.min(+req.query.limit || 9, 50);
-  const offset = ((+req.query.page || 1) - 1) * limit;
-  const cats = (req.query.category || '').split(',').filter(Boolean);
-  const q = (req.query.q || '').trim();
+app.get(
+  '/api/posts',
+  ah(async (req, res) => {
+    const limit = Math.min(+req.query.limit || 9, 50);
+    const page = Math.max(+req.query.page || 1, 1);
+    const offset = (page - 1) * limit;
+    const cats = (req.query.category || '').split(',').filter(Boolean);
+    // strip characters that have a special meaning inside a PostgREST filter
+    const q = (req.query.q || '').trim().replace(/[,()"\\]/g, ' ');
 
-  const w = [];
-  const args = [];
+    let query = supabase.from('posts').select('*', { count: 'exact' });
 
-  if (cats.length) {
-    w.push(`category IN (${cats.map(() => '?').join()})`);
-    args.push(...cats);
-  }
+    if (cats.length) query = query.in('category', cats);
+    if (q) {
+      query = query.or(
+        ['title_en', 'title_ne', 'body_en', 'body_ne']
+          .map((f) => `${f}.ilike.%${q}%`)
+          .join(',')
+      );
+    }
 
-  if (q) {
-    w.push(
-      '(title_en LIKE ? OR title_ne LIKE ? OR body_en LIKE ? OR body_ne LIKE ?)'
-    );
-    args.push(...Array(4).fill(`%${q}%`));
-  }
+    query =
+      req.query.sort === 'views'
+        ? query.order('views', { ascending: false }).order('id', { ascending: false })
+        : query.order('id', { ascending: false });
 
-  const where = w.length ? 'WHERE ' + w.join(' AND ') : '';
-  const order =
-    req.query.sort === 'views' ? 'views DESC, id DESC' : 'id DESC';
+    const { data, count, error } = await query.range(offset, offset + limit - 1);
+    if (error) throw error;
 
-  const items = db
-    .prepare(
-      `SELECT * FROM posts ${where} ORDER BY ${order} LIMIT ? OFFSET ?`
-    )
-    .all(...args, limit, offset);
+    res.json({
+      items: data,
+      total: count,
+      pages: Math.ceil(count / limit),
+    });
+  })
+);
 
-  const total = db
-    .prepare(`SELECT COUNT(*) c FROM posts ${where}`)
-    .get(...args).c;
-
-  res.json({
-    items,
-    total,
-    pages: Math.ceil(total / limit),
-  });
-});
-
-// Get individual post
-app.get('/api/posts/:id', (req, res) => {
-  db.prepare('UPDATE posts SET views=views+1 WHERE id=?').run(req.params.id);
-
-  const p = db
-    .prepare('SELECT * FROM posts WHERE id=?')
-    .get(req.params.id);
-
-  p ? res.json(p) : res.status(404).json({ error: 'Not found' });
-});
+// Get individual post (also counts a view)
+app.get(
+  '/api/posts/:id',
+  ah(async (req, res) => {
+    if (!/^\d+$/.test(req.params.id)) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    const { data, error } = await supabase.rpc('increment_views', {
+      post_id: Number(req.params.id),
+    });
+    if (error) throw error;
+    data && data.length
+      ? res.json(data[0])
+      : res.status(404).json({ error: 'Not found' });
+  })
+);
 
 // Post fields
-const fields = (b) => [
-  b.title_en,
-  b.title_ne,
-  b.body_en,
-  b.body_ne,
-  b.category || 'news',
-];
+const fields = (b) => ({
+  title_en: b.title_en,
+  title_ne: b.title_ne,
+  body_en: b.body_en,
+  body_ne: b.body_ne,
+  category: b.category || 'news',
+});
 
 // Create post
-app.post('/api/posts', auth, upload.single('image'), (req, res) => {
-  const r = db
-    .prepare(
-      'INSERT INTO posts(title_en,title_ne,body_en,body_ne,category,image) VALUES(?,?,?,?,?,?)'
-    )
-    .run(
-      ...fields(req.body),
-      req.file ? '/uploads/' + req.file.filename : null
-    );
-
-  res.json({ id: r.lastInsertRowid });
-});
+app.post(
+  '/api/posts',
+  auth,
+  upload.single('image'),
+  ah(async (req, res) => {
+    const image = req.file ? await uploadImage(req.file) : null;
+    const { data, error } = await supabase
+      .from('posts')
+      .insert({ ...fields(req.body), image })
+      .select('id')
+      .single();
+    if (error) {
+      await removeImage(image); // do not leave an orphan image behind
+      throw error;
+    }
+    res.json({ id: data.id });
+  })
+);
 
 // Update post
-app.put('/api/posts/:id', auth, upload.single('image'), (req, res) => {
-  const old = db
-    .prepare('SELECT image FROM posts WHERE id=?')
-    .get(req.params.id);
+app.put(
+  '/api/posts/:id',
+  auth,
+  upload.single('image'),
+  ah(async (req, res) => {
+    if (!/^\d+$/.test(req.params.id)) throw httpError(404, 'Not found');
+    const id = Number(req.params.id);
 
-  if (!old) {
-    return res.status(404).json({ error: 'Not found' });
-  }
+    const { data: old, error: e1 } = await supabase
+      .from('posts')
+      .select('image')
+      .eq('id', id)
+      .maybeSingle();
+    if (e1) throw e1;
+    if (!old) throw httpError(404, 'Not found');
 
-  const img = req.file ? '/uploads/' + req.file.filename : old.image;
-
-  db.prepare(
-    'UPDATE posts SET title_en=?,title_ne=?,body_en=?,body_ne=?,category=?,image=? WHERE id=?'
-  ).run(...fields(req.body), img, req.params.id);
-
-  res.json({ ok: true });
-});
+    const newImage = req.file ? await uploadImage(req.file) : null;
+    const { error } = await supabase
+      .from('posts')
+      .update({ ...fields(req.body), image: newImage || old.image })
+      .eq('id', id);
+    if (error) {
+      await removeImage(newImage);
+      throw error;
+    }
+    if (newImage) await removeImage(old.image); // replaced, so delete the old file
+    res.json({ ok: true });
+  })
+);
 
 // Delete post
-app.delete('/api/posts/:id', auth, (req, res) => {
-  db.prepare('DELETE FROM posts WHERE id=?').run(req.params.id);
-  res.json({ ok: true });
-});
+app.delete(
+  '/api/posts/:id',
+  auth,
+  ah(async (req, res) => {
+    if (!/^\d+$/.test(req.params.id)) throw httpError(404, 'Not found');
+    const id = Number(req.params.id);
+
+    const { data: old } = await supabase
+      .from('posts')
+      .select('image')
+      .eq('id', id)
+      .maybeSingle();
+
+    const { error } = await supabase.from('posts').delete().eq('id', id);
+    if (error) throw error;
+    if (old) await removeImage(old.image);
+    res.json({ ok: true });
+  })
+);
 
 // Serve frontend production build
 const dist = path.join(__dirname, '../client/dist');
 
 if (fs.existsSync(dist)) {
   app.use(express.static(dist));
-  app.get('*', (_req, res) =>
-    res.sendFile(path.join(dist, 'index.html'))
-  );
+  app.get('*', (_req, res) => res.sendFile(path.join(dist, 'index.html')));
 }
+
+// Error handler: always answers with JSON so the admin panel can show the message
+// eslint-disable-next-line no-unused-vars
+app.use((err, _req, res, _next) => {
+  if (err instanceof multer.MulterError) {
+    const msg =
+      err.code === 'LIMIT_FILE_SIZE'
+        ? 'Image is too large. Maximum size is 5 MB.'
+        : err.message;
+    return res.status(err.code === 'LIMIT_FILE_SIZE' ? 413 : 400).json({ error: msg });
+  }
+  if (err.expose) {
+    return res.status(err.status || 400).json({ error: err.message });
+  }
+  console.error(err);
+  res.status(500).json({ error: 'Server error. Please try again.' });
+});
 
 // Start server
 app.listen(PORT, () => {

@@ -75,18 +75,21 @@ npm run install:all
 
 ### 3. Configure environment variables
 
-Create the server environment file:
+Copy the template to the **project root** and fill it in:
 
 ```bash
-cp server/.env.example server/.env
+cp .env.example .env
 ```
 
-Edit `server/.env` and configure the required environment variables, including:
+Required values: `ADMIN_PASSWORD`, `JWT_SECRET`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY`.
+Never commit your real `.env` file.
 
-- `ADMIN_PASSWORD`
-- `JWT_SECRET`
+### 3b. Set up Supabase (one time)
 
-Use a strong, unique password and a securely generated JWT secret. Never commit your actual `.env` file.
+1. Create a project at supabase.com.
+2. Open **SQL Editor**, paste the contents of `server/supabase-setup.sql` and run it.
+3. Copy the Project URL and a **secret key** (Project Settings > API Keys) into `.env`.
+4. (Only if you have old posts in `server/data/aipana.db`) run `cd server && node migrate-to-supabase.js` once.
 
 ### 4. Start the backend
 
@@ -138,21 +141,16 @@ The application serves the frontend and API through the configured server port (
 
 ## Database and File Storage
 
-Application data is stored under:
+Posts are stored in a **Supabase Postgres** table (`posts`) and uploaded images in a
+public **Supabase Storage** bucket (`images`). Nothing important is stored on the
+web server's disk, so redeploys and restarts on hosts such as Render's free plan do
+not lose data.
 
-```text
-server/data/
-```
-
-This directory contains the SQLite database and uploaded images.
-
-**Important deployment considerations:**
-
-- Use persistent storage for the database and uploaded files.
-- Back up the SQLite database regularly.
-- Protect uploaded files and user data.
-- Do not expose environment files or authentication secrets.
-- Ensure the production server has appropriate read/write permissions.
+- Set `SUPABASE_URL` and `SUPABASE_SECRET_KEY` (plus `ADMIN_PASSWORD`, `JWT_SECRET`)
+  in your host's environment settings (Render > Environment).
+- Free Supabase projects pause after a week without activity. Point a free uptime
+  monitor at `/api/health` so the project (and the free Render service) stay awake.
+- `server/data/` is no longer used and is git-ignored.
 
 ## Admin Panel
 

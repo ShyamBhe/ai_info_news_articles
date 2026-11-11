@@ -19,7 +19,9 @@ const api = async (url, opts = {}) => {
 const pick = (p, f, lang) => p[`${f}_${lang}`] || p[`${f}_${lang === 'ne' ? 'en' : 'ne'}`] || '';
 const catName = (c, lang) => label(c, lang);
 const loc = (lang) => (lang === 'ne' ? 'ne-NP' : 'en-US');
-const fmt = (p, lang) => new Date(p.created_at + 'Z').toLocaleDateString(loc(lang), { dateStyle: 'medium' });
+// Supabase returns ISO timestamps (with timezone); old SQLite ones had no timezone, so add 'Z' only if missing.
+const toDate = (s) => new Date(/(Z|[+-]\d\d:?\d\d)$/i.test(s) ? s : String(s).replace(' ', 'T') + 'Z');
+const fmt = (p, lang) => toDate(p.created_at).toLocaleDateString(loc(lang), { dateStyle: 'medium' });
 
 function Card({ p }) {
   const { lang, t } = useApp();
@@ -210,7 +212,7 @@ function Article() {
     <article className="wrap narrow">
       <Link to="/">{t.back}</Link>
       <h1>{pick(p, 'title', lang)}</h1>
-      <small>{catName(p.category, lang)} · {new Date(p.created_at + 'Z').toLocaleDateString(lang === 'ne' ? 'ne-NP' : 'en-US', { dateStyle: 'long' })}</small>
+      <small>{catName(p.category, lang)} · {toDate(p.created_at).toLocaleDateString(lang === 'ne' ? 'ne-NP' : 'en-US', { dateStyle: 'long' })}</small>
       {p.image && <img className="cover" src={p.image} alt="" />}
       {pick(p, 'body', lang).split(/\n{2,}/).map((para, i) => <p key={i} className="prose">{para}</p>)}
     </article>
