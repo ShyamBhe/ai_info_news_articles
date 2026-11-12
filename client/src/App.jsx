@@ -190,12 +190,15 @@ function Footer() {
   const { lang, t } = useApp();
   return (
     <footer className="ftr">
-      <div className="wrap fcols">
-        {MENU.filter((m) => m.kids.length).map((m) => (
-          <div key={m.slug}><h4><Link to={`/c/${m.slug}`}>{m[lang]}</Link></h4>{m.kids.map((k) => <Link key={k[0]} to={`/c/${k[0]}`}>{k[lang === 'ne' ? 2 : 1]}</Link>)}</div>
-        ))}
-      </div>
-      <div className="wrap copy">© {new Date().getFullYear()} {t.brand} · {t.footer} · <Link to="/c/blog">{label('blog', lang)}</Link> · <Link to="/admin">{t.admin}</Link></div>
+      <div className="wrap copy">
+  © {new Date().getFullYear()} {t.brand} · {t.footer} ·
+  <Link to="/c/blog">{label('blog', lang)}</Link> ·
+  <Link to="/admin">{t.admin}</Link>
+  {" · "}
+  {lang === "ne" ? "श्याम भेतुवाल" : "Shyam Bhetuwal"}
+  {" · "}
+  {lang === "ne" ? "निर्माणाधीन" : "Under Development"}
+</div>
     </footer>
   );
 }
