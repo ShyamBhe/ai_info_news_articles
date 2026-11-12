@@ -8,7 +8,7 @@ export const T = {
     login: 'Login', password: 'Password', logout: 'Logout', newPost: 'New post', editPost: 'Edit post',
     save: 'Save', cancel: 'Cancel', del: 'Delete', edit: 'Edit', confirmDel: 'Delete this post?',
     titleEn: 'Title (English)', titleNe: 'Title (नेपाली)', bodyEn: 'Body (English)', bodyNe: 'Body (नेपाली)',
-    category: 'Category', image: 'Image', footer: 'All rights reserved.',
+    category: 'Category', image: 'Image', footer: 'Shyam Bhetuwal, All rights reserved.',
   },
   ne: {
     brand: 'एआई पाना', home: 'गृहपृष्ठ', news: 'समाचार', about: 'एआई भनेको के हो?', admin: 'एडमिन',
@@ -19,7 +19,7 @@ export const T = {
     login: 'लगइन', password: 'पासवर्ड', logout: 'लगआउट', newPost: 'नयाँ पोस्ट', editPost: 'पोस्ट सम्पादन',
     save: 'सेभ गर्नुहोस्', cancel: 'रद्द', del: 'मेट्नुहोस्', edit: 'सम्पादन', confirmDel: 'यो पोस्ट मेट्ने?',
     titleEn: 'शीर्षक (English)', titleNe: 'शीर्षक (नेपाली)', bodyEn: 'विवरण (English)', bodyNe: 'विवरण (नेपाली)',
-    category: 'वर्ग', image: 'तस्बिर', footer: 'सर्वाधिकार सुरक्षित।',
+    category: 'वर्ग', image: 'तस्बिर', footer: ' Shyam Bhetuwal सर्वाधिकार सुरक्षित।',
   },
 };
 
