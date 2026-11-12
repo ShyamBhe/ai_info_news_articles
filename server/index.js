@@ -206,11 +206,12 @@ app.get(
 );
 
 // Post fields
+const nl = (s) => (typeof s === 'string' ? s.replace(/\r\n?/g, '\n') : s); // CRLF -> LF
 const fields = (b) => ({
-  title_en: b.title_en,
-  title_ne: b.title_ne,
-  body_en: b.body_en,
-  body_ne: b.body_ne,
+  title_en: nl(b.title_en),
+  title_ne: nl(b.title_ne),
+  body_en: nl(b.body_en),
+  body_ne: nl(b.body_ne),
   category: b.category || 'news',
 });
 

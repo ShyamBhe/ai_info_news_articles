@@ -214,7 +214,7 @@ function Article() {
       <h1>{pick(p, 'title', lang)}</h1>
       <small>{catName(p.category, lang)} · {toDate(p.created_at).toLocaleDateString(lang === 'ne' ? 'ne-NP' : 'en-US', { dateStyle: 'long' })}</small>
       {p.image && <img className="cover" src={p.image} alt="" />}
-      {pick(p, 'body', lang).split(/\n{2,}/).map((para, i) => <p key={i} className="prose">{para}</p>)}
+      {pick(p, 'body', lang).replace(/\r\n?/g, '\n').split(/\n\s*\n/).map((para, i) => <p key={i} className="prose">{para.trim()}</p>)}
     </article>
   );
 }
